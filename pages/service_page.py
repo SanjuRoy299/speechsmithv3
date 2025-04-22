@@ -1038,6 +1038,25 @@ def services():
                         st.error("No speech detected in the audio file")
                         st.stop()
                     
+                    # Store transcription in session state
+                    st.session_state.transcription = transcription
+                    
+                    # Generate AI version of the speech
+                    try:
+                        st.info("Generating AI version of your speech...")
+                        tts = gTTS(text=transcription, lang='en')
+                        ai_audio_io = io.BytesIO()
+                        tts.write_to_fp(ai_audio_io)
+                        ai_audio_io.seek(0)
+                        ai_audio_bytes = ai_audio_io.getvalue()
+                        
+                        # Store both the BytesIO object and the bytes in session state
+                        st.session_state.ai_audio_io = ai_audio_io
+                        st.session_state.ai_audio_bytes = ai_audio_bytes
+                        st.success("AI version generated successfully!")
+                    except Exception as e:
+                        st.error(f"Error generating AI version: {str(e)}")
+                    
                     # Initialize results with default values
                     results = {
                         'pronunciation': {
@@ -1191,22 +1210,43 @@ def services():
                         </div>
                         """
                     st.html(content)
+                    
+                    # Display the refined speech audio
                     st.audio(io.BytesIO(audio_bytes), format="audio/wav")
-                
-                # After successful processing, show remaining uses
-                if not st.session_state.get('is_authenticated', False):
-                    remaining_uses = 5 - st.session_state.usage_count
-                    if remaining_uses > 0:
-                        st.info(f"You have {remaining_uses} free trial uses remaining. Please contact us for full access.")
-                    else:
-                        st.error("""
-                            You have reached the free trial limit of 5 uses.
+                    
+                    # Display the AI version of original speech
+                    if st.session_state.get('ai_audio_bytes'):
+                        st.subheader("AI Version of Original Speech")
+                        try:
+                            ai_audio_io = io.BytesIO(st.session_state.ai_audio_bytes)
+                            ai_audio_io.seek(0)
+                            st.audio(ai_audio_io, format='audio/mp3')
                             
-                            Please fill out the Contact Us form to request access credentials.
-                            Our team will review your request and provide you with login details.
-                            
-                            Thank you for trying out SpeechSmith!
-                        """)
+                            # Add download button for AI version
+                            st.download_button(
+                                label="Download AI Version",
+                                data=st.session_state.ai_audio_bytes,
+                                file_name="ai_version.mp3",
+                                mime="audio/mp3"
+                            )
+                        except Exception as e:
+                            st.error(f"Error displaying AI audio: {str(e)}")
+                            st.write("Debug info - Audio data length:", len(st.session_state.ai_audio_bytes) if st.session_state.get('ai_audio_bytes') else "No audio data")
+                    
+                    # After successful processing, show remaining uses
+                    if not st.session_state.get('is_authenticated', False):
+                        remaining_uses = 5 - st.session_state.usage_count
+                        if remaining_uses > 0:
+                            st.info(f"You have {remaining_uses} free trial uses remaining. Please contact us for full access.")
+                        else:
+                            st.error("""
+                                You have reached the free trial limit of 5 uses.
+                                
+                                Please fill out the Contact Us form to request access credentials.
+                                Our team will review your request and provide you with login details.
+                                
+                                Thank you for trying out SpeechSmith!
+                            """)
             
             except Exception as e:
                 # Decrement usage counter if processing failed
@@ -1244,6 +1284,28 @@ def services():
         if uploaded_file:
             st.subheader("Original Speech")
             st.audio(uploaded_file, format='audio/wav')
+            
+            # Display AI version if available
+            if st.session_state.get('ai_audio_bytes'):
+                st.subheader("AI Version of Original Speech")
+                try:
+                    # Create a new BytesIO object from the stored bytes
+                    ai_audio_io = io.BytesIO(st.session_state.ai_audio_bytes)
+                    ai_audio_io.seek(0)
+                    
+                    # Display the audio
+                    st.audio(ai_audio_io, format='audio/mp3')
+                    
+                    # Add download button
+                    st.download_button(
+                        label="Download AI Version",
+                        data=st.session_state.ai_audio_bytes,
+                        file_name="ai_version.mp3",
+                        mime="audio/mp3"
+                    )
+                except Exception as e:
+                    st.error(f"Error displaying AI audio: {str(e)}")
+                    st.write("Debug info - Audio data length:", len(st.session_state.ai_audio_bytes) if st.session_state.get('ai_audio_bytes') else "No audio data")
         
         # Display transcription
         if st.session_state.get('transcription'):
