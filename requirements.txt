@@ -122,3 +122,4 @@ uvicorn==0.32.0
 watchdog==5.0.3
 websockets==13.1
 yarl==1.17.1
+ffmpeg==1.4
