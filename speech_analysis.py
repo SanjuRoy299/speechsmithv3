@@ -38,12 +38,38 @@ class SpeechAnalyzer:
         return duration
     
     def transcribe_audio(self, audio_path):
-        """Convert speech to text"""
+        """Convert speech to text using OpenAI's Whisper API"""
         try:
-            with sr.AudioFile(audio_path) as source:
-                audio = self.recognizer.record(source)
-                text = self.recognizer.recognize_google(audio)
-                return text
+            import openai
+            from openai import OpenAI
+            
+            # Initialize OpenAI client
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            
+            # Open the audio file
+            with open(audio_path, "rb") as audio_file:
+                # Transcribe the audio file
+                st.write("Transcribing using OpenAI Whisper...")
+                response = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="en",
+                    response_format="text"
+                )
+                
+                # Get the transcription
+                transcription = response.strip()
+                
+                # Verify the transcription
+                if not transcription:
+                    st.error("No speech detected in the audio file")
+                    return None
+                
+                # Print transcription length for debugging
+                st.write(f"Transcription length: {len(transcription)} characters")
+                
+                return transcription
+                
         except Exception as e:
             st.error(f"Error in transcription: {str(e)}")
             return None
