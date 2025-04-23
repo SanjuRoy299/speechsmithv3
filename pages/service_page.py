@@ -987,17 +987,13 @@ def services():
         
         additional_requirements = st.text_area("Any additional requirements or preferences?", height=100)
         # st.markdown('</div>', unsafe_allow_html=True)
-        # Validation to ensure all fields are filled
-        if not purpose or not audience or not duration or not tone or not additional_requirements:
-            st.markdown("""
-                <div class="stStatusContainer stError">
-                    Please fill out all fields before submitting.
-                </div>
-            """, unsafe_allow_html=True)
-            
-            st.stop()  # Stop execution here if fields are missing
-
+        
         if st.button("Process Speech"):
+            # Validation check
+            if not purpose or not audience or not duration or not tone or not additional_requirements:
+                st.error("Please fill out all fields before processing.")
+                st.stop()
+            
             # Increment usage counter for non-authenticated users
             if not st.session_state.get('is_authenticated', False):
                 st.session_state.usage_count += 1
