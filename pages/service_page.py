@@ -460,20 +460,45 @@ def extract_text_from_document(uploaded_file):
     return None
 
 def transcribe_audio_from_file(client, uploaded_file):
-
     if uploaded_file is not None:
         # Read the file content
         audio_bytes = uploaded_file.read()
         
         # Create source and options for transcription
         source = {"buffer": audio_bytes, "mimetype": f"audio/{uploaded_file.name.split('.')[-1]}"}
-        options = PrerecordedOptions(model="nova", language="en-US")
+        options = PrerecordedOptions(
+            model="nova",
+            language="en-US",
+            smart_format=True,
+            punctuate=True,
+            utterances=True,
+            diarize=True,
+            max_alternatives=1,
+            # Add options for longer audio files
+            interim_results=False,
+            endpointing=True,
+            vad_events=True,
+            # Increase the maximum duration limit
+            max_duration=600  # 10 minutes maximum
+        )
         
-        # Perform transcription
-        response = client.listen.prerecorded.v("1").transcribe_file(source, options)
-        
-        # Return the transcript
-        return response.results.channels[0].alternatives[0].transcript
+        try:
+            # Perform transcription
+            response = client.listen.prerecorded.v("1").transcribe_file(source, options)
+            
+            # Get the full transcript
+            transcript = response.results.channels[0].alternatives[0].transcript
+            
+            # Verify transcript length
+            if not transcript or len(transcript.strip()) == 0:
+                st.warning("No speech detected in the audio file")
+                return None
+                
+            return transcript
+            
+        except Exception as e:
+            st.error(f"Error during transcription: {str(e)}")
+            return None
     
     else:
         st.warning("Please upload an audio or video file to transcribe.")
@@ -1037,6 +1062,9 @@ def services():
                     # Store transcription in session state
                     st.session_state.transcription = transcription
                     
+                    # Debug: Print transcription length and content
+                    st.write(f"Transcription length: {len(transcription)} characters")
+                    
                     # Generate AI version of the speech
                     try:
                         st.info("Generating AI version of your speech...")
@@ -1189,7 +1217,17 @@ def services():
                 content = f"""
                 <div class="content-section">
                     <h3>Original Transcription</h3>
-                    {format_transcription_with_emphasis(original, results.get('pronunciation', {}).get('difficult_words', []))}
+                    <div class="transcription-container">
+                        <div class="transcription-legend">
+                            <strong>Legend:</strong><br>
+                            <span class="bold-word">Bold words</span> - Words to emphasize<br>
+                            <span class="pause-marker">|</span> - Pause in speech<br>
+                            <span class="mispronounced">Highlighted words</span> - Words that need pronunciation improvement
+                        </div>
+                        <div class="transcription-text">
+                            {transcription}
+                        </div>
+                    </div>
                     
                     <h3>Refined Speech</h3>
                     {format_transcription_with_emphasis(refined)}
@@ -1209,7 +1247,7 @@ def services():
                     
                     # Display the refined speech audio
                     st.audio(io.BytesIO(audio_bytes), format="audio/wav")
-                    
+                
                     # Display the AI version of original speech
                     if st.session_state.get('ai_audio_bytes'):
                         st.subheader("AI Version of Original Speech")
@@ -1218,31 +1256,33 @@ def services():
                             ai_audio_io.seek(0)
                             st.audio(ai_audio_io, format='audio/mp3')
                             
+                            # Create a container for download buttons
+                            download_container = st.container()
+                            
                             # Add download button for AI version
-                            st.download_button(
-                                label="Download AI Version",
-                                data=st.session_state.ai_audio_bytes,
-                                file_name="ai_version.mp3",
-                                mime="audio/mp3"
-                            )
+                            with download_container:
+                                st.markdown(
+                                    f'<a href="data:audio/mp3;base64,{base64.b64encode(st.session_state.ai_audio_bytes).decode()}" download="ai_version.mp3" style="text-decoration: none;">'
+                                    '<button style="background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%;">'
+                                    'Download AI Version'
+                                    '</button>'
+                                    '</a>',
+                                    unsafe_allow_html=True
+                                )
+                            
+                            # Add download button for refined speech
+                            with download_container:
+                                st.markdown(
+                                    f'<a href="data:audio/wav;base64,{audio_base64}" download="refined_speech.wav" style="text-decoration: none;">'
+                                    '<button style="background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; width: 100%;">'
+                                    'Download Refined Speech Audio'
+                                    '</button>'
+                                    '</a>',
+                                    unsafe_allow_html=True
+                                )
                         except Exception as e:
                             st.error(f"Error displaying AI audio: {str(e)}")
                             st.write("Debug info - Audio data length:", len(st.session_state.ai_audio_bytes) if st.session_state.get('ai_audio_bytes') else "No audio data")
-                    
-                    # After successful processing, show remaining uses
-                    if not st.session_state.get('is_authenticated', False):
-                        remaining_uses = 5 - st.session_state.usage_count
-                        if remaining_uses > 0:
-                            st.info(f"You have {remaining_uses} free trial uses remaining. Please contact us for full access.")
-                        else:
-                            st.error("""
-                                You have reached the free trial limit of 5 uses.
-                                
-                                Please fill out the Contact Us form to request access credentials.
-                                Our team will review your request and provide you with login details.
-                                
-                                Thank you for trying out SpeechSmith!
-                            """)
             
             except Exception as e:
                 # Decrement usage counter if processing failed
