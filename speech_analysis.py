@@ -66,7 +66,7 @@ class SpeechAnalyzer:
                     return None
                 
                 # Print transcription length for debugging
-                st.write(f"Transcription length: {len(transcription)} characters")
+                #st.write(f"Transcription length: {len(transcription)} characters")
                 
                 return transcription
                 
@@ -78,26 +78,28 @@ class SpeechAnalyzer:
         """Analyze text using Llama 3 model via Groq"""
         prompts = {
             'pronunciation': f"""
-                Analyze the following text to identify words that were mispronounced during speech:
+                Analyze the following text for pronunciation accuracy and identify any potentially mispronounced words:
                 
                 Text: {text}
                 
                 Please provide a JSON object with the following structure:
                 {{
                     "mispronounced_words": {{
-                        "word1": confidence_score_1,
+                        "word1": confidence_score_1,  # Score between 0 and 1, where 1 is perfect pronunciation
                         "word2": confidence_score_2
                     }},
-                    "confidence_scores": {{
-                        "word1": confidence_score_1,
-                        "word2": confidence_score_2
-                    }},
-                    "accuracy_assessment": "percentage score (0-100)%",
                     "pronunciation_guidance": {{
                         "word1": "correct pronunciation guide",
                         "word2": "correct pronunciation guide"
                     }}
                 }}
+                
+                Guidelines:
+                1. Only include words that are likely to be mispronounced
+                2. Consider common pronunciation challenges for non-native speakers
+                3. Focus on words with complex syllable structures or unusual spellings
+                4. Assign confidence scores based on pronunciation difficulty
+                5. Provide clear pronunciation guidance for each identified word
                 
                 Only return the JSON object, nothing else.
             """,
@@ -179,62 +181,150 @@ class SpeechAnalyzer:
             print(f"Error in Llama analysis: {str(e)}")
             return None
 
-    def analyze_pronunciation(self, audio_path,transcript):
+    def analyze_pronunciation(self, audio_path, transcript):
         """Analyze pronunciation using audio features and Llama"""
-        # Get basic audio features
-        y, sr = librosa.load(audio_path)
-        
-        # Get Llama analysis for pronunciation
-        llama_analysis = self.analyze_text_with_llama(transcript, 'pronunciation')
+        try:
+            # Get basic audio features
+            y, sr = librosa.load(audio_path)
+            
+            # Get Llama analysis for pronunciation
+            llama_analysis = self.analyze_text_with_llama(transcript, 'pronunciation')
 
-        if llama_analysis:
+            if llama_analysis:
+                # Calculate overall accuracy based on mispronounced words
+                difficult_words = llama_analysis.get('mispronounced_words', {})
+                total_words = len(transcript.split())
+                mispronounced_count = len(difficult_words)
+                
+                if total_words > 0:
+                    accuracy = round((1 - (mispronounced_count / total_words)) * 100, 2)
+                else:
+                    accuracy = 0
+
+                # Generate feedback based on analysis
+                feedback = []
+                if mispronounced_count > 0:
+                    if mispronounced_count / total_words > 0.2:  # More than 20% mispronounced
+                        feedback.append("The speech contains several pronunciation challenges that affect clarity.")
+                    else:
+                        feedback.append("The speech has some pronunciation issues but remains generally understandable.")
+                    
+                    if any(score < 0.5 for score in difficult_words.values()):
+                        feedback.append("Some words have very low confidence scores, indicating significant pronunciation difficulties.")
+                else:
+                    feedback.append("Pronunciation is clear and accurate.")
+
+                return {
+                    'accuracy': accuracy,
+                    'feedback': ' '.join(feedback),
+                    'difficult_words': difficult_words,
+                    'pronunciation_guidance': llama_analysis.get('pronunciation_guidance', {})
+                }
+            else:
+                return {
+                    'accuracy': 0,
+                    'feedback': 'Unable to analyze pronunciation',
+                    'difficult_words': {},
+                    'pronunciation_guidance': {}
+                }
+                
+        except Exception as e:
+            print(f"Error in pronunciation analysis: {str(e)}")
             return {
-                'confidence_scores': llama_analysis['confidence_scores'],
-                'mispronounced_words': llama_analysis['mispronounced_words'],
-                'accuracy_assessment': llama_analysis['accuracy_assessment'],
-                'pronunciation_guidance': llama_analysis.get('pronunciation_guidance', {})
+                'accuracy': 0,
+                'feedback': f'Error in pronunciation analysis: {str(e)}',
+                'difficult_words': {},
+                'pronunciation_guidance': {}
             }
-        else:
-            return None
 
     def analyze_pitch(self, audio_path, gender):
         """Analyze pitch characteristics"""
-        if gender not in ['male', 'female']:
-            return None
-        
-        y, sr = librosa.load(audio_path)
-        
-        # Extract pitch using librosa
-        pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
-        
-        # Get non-zero pitches
-        pitches_flat = pitches[magnitudes > np.max(magnitudes) * 0.1]
-        pitches_flat = pitches_flat[pitches_flat > 0]
-        
-        if len(pitches_flat) == 0:
-            return {
-                'monotonous': True,
-                'erratic': False,
-                'mean_pitch': 0,
-                'pitch_std': 0
+        try:
+            if gender not in ['male', 'female']:
+                return {
+                    'variation': 'Gender not specified for pitch analysis',
+                    'consistency': 'Gender not specified for pitch analysis',
+                    'average': 0.0
+                }
+            
+            # Load audio file
+            y, sr = librosa.load(audio_path)
+            
+            # Extract pitch using librosa
+            pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
+            
+            # Get non-zero pitches
+            pitches_flat = pitches[magnitudes > np.max(magnitudes) * 0.1]
+            pitches_flat = pitches_flat[pitches_flat > 0]
+            
+            if len(pitches_flat) == 0:
+                return {
+                    'variation': 'Unable to detect pitch',
+                    'consistency': 'Unable to detect pitch',
+                    'average': 0.0
+                }
+            
+            # Calculate pitch statistics
+            pitch_mean = np.mean(pitches_flat)
+            pitch_std = np.std(pitches_flat)
+            pitch_range = np.max(pitches_flat) - np.min(pitches_flat)
+            
+            # Define gender-specific thresholds
+            thresholds = {
+                'male': {
+                    'monotonous': 20,
+                    'erratic': 80,
+                    'normal_range': (85, 180),
+                    'variation_threshold': 40
+                },
+                'female': {
+                    'monotonous': 30,
+                    'erratic': 100,
+                    'normal_range': (165, 255),
+                    'variation_threshold': 50
+                }
             }
-        
-        pitch_mean = np.mean(pitches_flat)
-        pitch_std = np.std(pitches_flat)
-        
-        thresholds = {
-            'male': {'monotonous': 20, 'erratic': 80},
-            'female': {'monotonous': 30, 'erratic': 100}
-        }
-        
-        current_threshold = thresholds[gender]
-        
-        return {
-            'monotonous': bool(pitch_std < current_threshold['monotonous']),
-            'erratic': bool(pitch_std > current_threshold['erratic']),
-            'mean_pitch': float(pitch_mean),
-            'pitch_std': float(pitch_std)
-        }
+            
+            current_threshold = thresholds[gender]
+            
+            # Analyze pitch variation
+            if pitch_std < current_threshold['monotonous']:
+                variation = 'Limited pitch variation. Consider adding more vocal variety to maintain audience interest.'
+            elif pitch_std > current_threshold['erratic']:
+                variation = 'Excessive pitch variation. Try to maintain more consistent pitch levels.'
+            else:
+                variation = 'Good pitch variation. Maintains audience interest while being clear and consistent.'
+            
+            # Analyze pitch consistency
+            if pitch_range < current_threshold['variation_threshold']:
+                consistency = 'Pitch remains too consistent. Consider varying your pitch more to emphasize key points.'
+            elif pitch_range > current_threshold['variation_threshold'] * 2:
+                consistency = 'Pitch varies too much. Try to maintain more consistent levels while still emphasizing important points.'
+            else:
+                consistency = 'Pitch consistency is good. Maintains appropriate variation while staying clear.'
+            
+            # Check if average pitch is within normal range
+            normal_min, normal_max = current_threshold['normal_range']
+            if pitch_mean < normal_min:
+                consistency += ' Average pitch is lower than typical for your gender.'
+            elif pitch_mean > normal_max:
+                consistency += ' Average pitch is higher than typical for your gender.'
+            
+            return {
+                'variation': variation,
+                'consistency': consistency,
+                'average': float(pitch_mean),
+                'standard_deviation': float(pitch_std),
+                'range': float(pitch_range)
+            }
+            
+        except Exception as e:
+            print(f"Error in pitch analysis: {str(e)}")
+            return {
+                'variation': f'Error in pitch analysis: {str(e)}',
+                'consistency': f'Error in pitch analysis: {str(e)}',
+                'average': 0.0
+            }
 
     def analyze_speech_rate(self, audio_path, transcript):
         """Analyze speech rate and pauses"""
@@ -337,7 +427,7 @@ def analyze_speaking_style(rate_analysis):
 
 
 def generate_feedback(analyzer_results, topic):
-    """Generate comprehensive feedback with improved formatting"""
+    """Generate comprehensive feedback based on actual analysis results"""
     feedback = {
         'tone_and_style': {
             'title': 'Tone and Style Analysis',
@@ -368,100 +458,121 @@ def generate_feedback(analyzer_results, topic):
         }
     }
     
-    # Tone and Style Analysis
-    feedback['tone_and_style']['original'].extend([
-        'Lacked formal tone',
-        'Used casual language unsuitable for formal setting'
-    ])
-    feedback['tone_and_style']['revised'].extend([
-        'More sophisticated vocabulary',
-        'Formal tone appropriate for classmates/colleagues',
-        'Better aligned with target audience'
-    ])
+    # Tone and Style Analysis based on mood analysis
+    if analyzer_results.get('mood'):
+        mood = analyzer_results['mood']
+        feedback['tone_and_style']['original'].extend([
+            f"Primary emotion: {mood.get('primary_emotion', 'Not analyzed')}",
+            f"Formality level: {mood.get('formality', 'Not analyzed')}",
+            f"Audience suitability: {mood.get('audience_suitability', 'Not analyzed')}"
+        ])
+        
+        if mood.get('mood_suitability_assessment'):
+            assessment = mood['mood_suitability_assessment']
+            feedback['tone_and_style']['revised'].extend([
+                f"Assessment: {assessment.get('assessment', 'Not analyzed')}",
+                "Reasons:"
+            ])
+            if isinstance(assessment.get('reasons'), list):
+                feedback['tone_and_style']['revised'].extend(assessment['reasons'])
 
-    # Pacing and Timing Analysis
-    feedback['pacing_and_timing']['original'].extend([
-        'Fast-paced delivery',
-        'Insufficient punctuation and pauses',
-        'Difficult for audience to follow'
-    ])
-    feedback['pacing_and_timing']['revised'].extend([
-        'Improved punctuation',
-        'Natural pauses added',
-        'Better emphasis points',
-        'Enhanced overall pacing'
-    ])
+    # Pacing and Timing Analysis based on speech rate
+    if analyzer_results.get('speech_rate'):
+        rate = analyzer_results['speech_rate']
+        feedback['pacing_and_timing']['original'].extend([
+            f"Words per minute: {rate.get('wpm', 0)}",
+            f"Assessment: {rate.get('assessment', 'Not analyzed')}",
+            f"Speech duration: {rate.get('speech_duration', 0)} seconds",
+            f"Total duration: {rate.get('total_duration', 0)} seconds"
+        ])
+        
+        if rate.get('filler_words'):
+            feedback['pacing_and_timing']['revised'].append("Filler words analysis:")
+            for word, count in rate['filler_words'].items():
+                feedback['pacing_and_timing']['revised'].append(f"- '{word}': {count} occurrences")
 
-    # Clarity and Structure
-    feedback['clarity_and_structure']['original'].extend([
-        'Lacked clear structure',
-        'Ideas mixed without transitions',
-        'No logical flow'
-    ])
-    feedback['clarity_and_structure']['revised'].extend([
-        'Logical progression of ideas',
-        'Starts with a question',
-        'Includes elaboration',
-        'Draws an analogy',
-        'Ends with call to action'
-    ])
+    # Clarity and Structure based on pronunciation
+    if analyzer_results.get('pronunciation'):
+        pron = analyzer_results['pronunciation']
+        feedback['clarity_and_structure']['original'].extend([
+            f"Overall accuracy: {pron.get('accuracy', 0)}%",
+            f"Accuracy feedback: {pron.get('feedback', 'Not analyzed')}"
+        ])
+        
+        if pron.get('difficult_words'):
+            feedback['clarity_and_structure']['revised'].append("Difficult words:")
+            for word, score in pron['difficult_words'].items():
+                feedback['clarity_and_structure']['revised'].append(f"- {word}: {score:.2f}")
 
     # Technical Analysis
     if analyzer_results.get('pronunciation'):
         pron = analyzer_results['pronunciation']
         feedback['technical_analysis']['pronunciation'].extend([
-            f"Overall Accuracy: {pron['accuracy']}%",
-            "Mispronounced Words:"
+            f"Overall Accuracy: {pron.get('accuracy', 0)}%",
+            f"Feedback: {pron.get('feedback', 'Not analyzed')}"
         ])
-        for word, score in pron['mispronounced_words'].items():
-            feedback['technical_analysis']['pronunciation'].append(
-                f"- {word} (confidence: {score})"
-            )
+        if pron.get('difficult_words'):
+            feedback['technical_analysis']['pronunciation'].append("Mispronounced Words:")
+            for word, score in pron['difficult_words'].items():
+                feedback['technical_analysis']['pronunciation'].append(f"- {word} (confidence: {score:.2f})")
 
     if analyzer_results.get('speech_rate'):
         rate = analyzer_results['speech_rate']
         feedback['technical_analysis']['speech_rate'].extend([
-            f"Current: {rate['assessment']}",
+            f"Words per minute: {rate.get('wpm', 0)}",
+            f"Assessment: {rate.get('assessment', 'Not analyzed')}",
             "Filler Words Usage:"
         ])
-        for word, count in rate['filler_words'].items():
-            feedback['technical_analysis']['speech_rate'].append(
-                f"- '{word}': {count} occurrences"
-            )
+        if rate.get('filler_words'):
+            for word, count in rate['filler_words'].items():
+                feedback['technical_analysis']['speech_rate'].append(f"- '{word}': {count} occurrences")
 
     if analyzer_results.get('mood'):
         mood = analyzer_results['mood']
         feedback['technical_analysis']['mood'].extend([
-            f"Status: {mood['assessment']}",
-            "Analysis:",
-            f"- {mood['reasons']}"
+            f"Primary Emotion: {mood.get('primary_emotion', 'Not analyzed')}",
+            f"Formality: {mood.get('formality', 'Not analyzed')}",
+            f"Audience Suitability: {mood.get('audience_suitability', 'Not analyzed')}"
         ])
+        if mood.get('mood_suitability_assessment'):
+            assessment = mood['mood_suitability_assessment']
+            feedback['technical_analysis']['mood'].extend([
+                f"Assessment: {assessment.get('assessment', 'Not analyzed')}",
+                "Reasons:"
+            ])
+            if isinstance(assessment.get('reasons'), list):
+                feedback['technical_analysis']['mood'].extend(assessment['reasons'])
 
     if analyzer_results.get('pitch'):
         pitch = analyzer_results['pitch']
         feedback['technical_analysis']['pitch'].extend([
-            f"Current Status: {pitch['variation']}",
-            "Analysis:",
-            "- No specific concerns noted" if not pitch['suggestions'] else f"- {', '.join(pitch['suggestions'])}"
+            f"Variation: {pitch.get('variation', 'Not analyzed')}",
+            f"Consistency: {pitch.get('consistency', 'Not analyzed')}",
+            f"Average Pitch: {pitch.get('average', 0):.1f} Hz"
         ])
 
-    # Improvement Recommendations
-    feedback['improvement_recommendations']['original'].extend([
-        'Added python reference',
-        'Created meaningful analogy between life and coding',
-        'Made content more relatable for coding-familiar audience',
-        'Extended to meet 1-minute duration requirement',
-        'Added depth and impact'
-    ])
-    
-    feedback['improvement_recommendations']['additional'].extend([
-        'Reduce filler word usage',
-        'Work on pronunciation of identified words',
-        'Maintain current pitch variation',
-        'Remove personal anecdotes',
-        'Keep focus on professional content'
-    ])
-    
+    # Improvement Recommendations based on all analyses
+    if analyzer_results.get('pronunciation'):
+        pron = analyzer_results['pronunciation']
+        if pron.get('difficult_words'):
+            feedback['improvement_recommendations']['original'].append("Pronunciation improvements needed for:")
+            for word in pron['difficult_words'].keys():
+                feedback['improvement_recommendations']['original'].append(f"- {word}")
+
+    if analyzer_results.get('speech_rate'):
+        rate = analyzer_results['speech_rate']
+        if rate.get('filler_words'):
+            feedback['improvement_recommendations']['additional'].append("Reduce usage of filler words:")
+            for word in rate['filler_words'].keys():
+                feedback['improvement_recommendations']['additional'].append(f"- {word}")
+
+    if analyzer_results.get('pitch'):
+        pitch = analyzer_results['pitch']
+        if pitch.get('variation') == 'Good pitch variation in voice':
+            feedback['improvement_recommendations']['additional'].append("Maintain current pitch variation")
+        else:
+            feedback['improvement_recommendations']['additional'].append("Work on improving pitch variation")
+
     return feedback
 
 def format_feedback_to_html(feedback, transcription, refined_speech):
