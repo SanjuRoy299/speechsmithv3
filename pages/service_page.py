@@ -593,7 +593,15 @@ def process_with_gpt(openai_api_key, transcription, purpose, audience, duration,
                 feedback = part.replace('FEEDBACK:', '').strip()
         
         if not original or not refined:
-            return transcription, transcription, "Could not process the response properly. Using original transcription."
+            # If no markers were added, add them to the original transcription
+            original = transcription
+            # Add emphasis markers to important words
+            words = original.split()
+            for i, word in enumerate(words):
+                if len(word) > 4 and word[0].isupper():  # Emphasize longer words that start with capital letters
+                    words[i] = f"**{word}**"
+            original = ' '.join(words)
+            return original, transcription, "Could not process the response properly. Using original transcription with basic emphasis."
         
         return original, refined, feedback
 
@@ -720,6 +728,36 @@ def generate_word_pronunciation(word):
         st.error(f"Error generating pronunciation for {word}: {str(e)}")
         return None
 
+def format_transcription_text(text, mispronounced_words=None):
+    """Format transcription text with emphasis markers and mispronounced words"""
+    if mispronounced_words is None:
+        mispronounced_words = []
+    
+    # Process bold text and add emphasis markers
+    pattern = r'\*\*(.*?)\*\*'
+    text = re.sub(pattern, r'<span class="bold-word">\1</span>', text)
+    
+    # Add pause markers
+    text = text.replace('|', '<span class="pause-marker">|</span>')
+    
+    # Split by spaces while preserving HTML tags
+    parts = re.split(r'(\s+|<[^>]*>)', text)
+    formatted_parts = []
+    
+    for part in parts:
+        if part.strip() and not part.startswith('<'):
+            word = part.strip()
+            # Match words from the mispronounced words list (case-insensitive)
+            if any(word.lower() == mw.lower() for mw in mispronounced_words):
+                formatted_parts.append(f'<span class="mispronounced">{word}</span>')
+            else:
+                formatted_parts.append(word)
+        else:
+            formatted_parts.append(part)
+    
+    # Join all parts back together
+    return ''.join(formatted_parts)
+
 def format_transcription_with_emphasis(transcription, mispronounced_words=None):
     """Format transcription with emphasis markers and mispronounced words"""
     if mispronounced_words is None:
@@ -768,7 +806,7 @@ def format_transcription_with_emphasis(transcription, mispronounced_words=None):
     """
 
 def format_detailed_feedback(results):
-    """Format detailed feedback sections"""
+    """Format detailed feedback sections with dynamic data"""
     pronunciation = results.get('pronunciation', {})
     pitch = results.get('pitch', {})
     speech_rate = results.get('speech_rate', {})
@@ -778,17 +816,17 @@ def format_detailed_feedback(results):
     pronunciation_section = """
     <h3>Pronunciation</h3>
     <ul>
-        <li>Overall speech accuracy: The speech accuracy is approximately {accuracy}%. {accuracy_feedback}</li>
-        <li>Mispronounced words and confidence scores:</li>
+        <li>Overall speech accuracy: {accuracy}%</li>
+        <li>Feedback: {feedback}</li>
     """.format(
         accuracy=pronunciation.get('accuracy', 0),
-        accuracy_feedback=pronunciation.get('feedback', '')
+        feedback=pronunciation.get('feedback', 'Not analyzed')
     )
     
     # Add mispronounced words with their scores
     difficult_words = pronunciation.get('difficult_words', {})
     if difficult_words:
-        pronunciation_section += "<ul>"
+        pronunciation_section += "<li>Mispronounced words and confidence scores:</li><ul>"
         for word, score in difficult_words.items():
             pronunciation_section += f"<li>{word}: {score:.2f}</li>"
         pronunciation_section += "</ul>"
@@ -801,33 +839,45 @@ def format_detailed_feedback(results):
         <li>Primary emotion: {primary_emotion}</li>
         <li>Formality level: {formality}</li>
         <li>Audience suitability: {audience}</li>
-        <li>Mood suitability: {suitability}</li>
-        <li>Reasons: {reasons}</li>
-    </ul>
     """.format(
         primary_emotion=mood.get('primary_emotion', 'Not analyzed'),
         formality=mood.get('formality', 'Not analyzed'),
-        audience=mood.get('audience_suitability', 'Not analyzed'),
-        suitability=mood.get('mood_suitability', 'Not analyzed'),
-        reasons=mood.get('reasons', 'Not analyzed')
+        audience=mood.get('audience_suitability', 'Not analyzed')
     )
+    
+    # Add mood assessment if available
+    if mood.get('mood_suitability_assessment'):
+        assessment = mood['mood_suitability_assessment']
+        mood_section += f"<li>Assessment: {assessment.get('assessment', 'Not analyzed')}</li>"
+        if isinstance(assessment.get('reasons'), list):
+            mood_section += "<li>Reasons:</li><ul>"
+            for reason in assessment['reasons']:
+                mood_section += f"<li>{reason}</li>"
+            mood_section += "</ul>"
+    mood_section += "</ul>"
     
     # Format speaking style feedback
     speaking_style_section = """
     <h3>Speaking Style</h3>
     <ul>
-        <li>Speaking rate: {rate} words per minute. {rate_feedback}</li>
-        <li>Balance between speech and pauses: {balance}</li>
-        <li>Filler words control: {filler_words}%</li>
-        <li>Content length: {content_feedback}</li>
-    </ul>
+        <li>Speaking rate: {rate} words per minute</li>
+        <li>Assessment: {rate_feedback}</li>
+        <li>Speech duration: {speech_duration} seconds</li>
+        <li>Total duration: {total_duration} seconds</li>
     """.format(
         rate=speech_rate.get('wpm', 0),
-        rate_feedback=speech_rate.get('feedback', ''),
-        balance=speech_rate.get('pause_balance', 'Not analyzed'),
-        filler_words=speech_rate.get('filler_words_percentage', 0),
-        content_feedback=speech_rate.get('content_feedback', '')
+        rate_feedback=speech_rate.get('assessment', 'Not analyzed'),
+        speech_duration=speech_rate.get('speech_duration', 0),
+        total_duration=speech_rate.get('total_duration', 0)
     )
+    
+    # Add filler words analysis if available
+    if speech_rate.get('filler_words'):
+        speaking_style_section += "<li>Filler words analysis:</li><ul>"
+        for word, count in speech_rate['filler_words'].items():
+            speaking_style_section += f"<li>'{word}': {count} occurrences</li>"
+        speaking_style_section += "</ul>"
+    speaking_style_section += "</ul>"
     
     # Format pitch feedback
     pitch_section = """
@@ -1010,13 +1060,13 @@ def services():
             tone= st.text_input("Please specify the tone")
 
         
-        additional_requirements = st.text_area("Any additional requirements or preferences?", height=100)
+        additional_requirements = st.text_area("Any additional requirements or preferences? (Optional)", height=100)
         # st.markdown('</div>', unsafe_allow_html=True)
         
         if st.button("Process Speech"):
             # Validation check
-            if not purpose or not audience or not duration or not tone or not additional_requirements:
-                st.error("Please fill out all fields before processing.")
+            if not purpose or not audience or not duration or not tone:
+                st.error("Please fill out all required fields before processing.")
                 st.stop()
             
             # Increment usage counter for non-authenticated users
@@ -1063,7 +1113,7 @@ def services():
                     st.session_state.transcription = transcription
                     
                     # Debug: Print transcription length and content
-                    st.write(f"Transcription length: {len(transcription)} characters")
+                    #st.write(f"Transcription length: {len(transcription)} characters")
                     
                     # Generate AI version of the speech
                     try:
@@ -1213,6 +1263,11 @@ def services():
                     </div>
                 """, unsafe_allow_html=True)
 
+                # Get mispronounced words from results
+                pronunciation_results = results.get('pronunciation', {})
+                difficult_words = pronunciation_results.get('difficult_words', {})
+                mispronounced_words = list(difficult_words.keys())
+                
                 # Display results with detailed feedback
                 content = f"""
                 <div class="content-section">
@@ -1225,7 +1280,7 @@ def services():
                             <span class="mispronounced">Highlighted words</span> - Words that need pronunciation improvement
                         </div>
                         <div class="transcription-text">
-                            {transcription}
+                            {format_transcription_text(transcription, mispronounced_words)}
                         </div>
                     </div>
                     
@@ -1235,6 +1290,28 @@ def services():
                 {format_detailed_feedback(results)}
                 """
                 st.html(content)
+                
+                # Add CSS for highlighting mispronounced words
+                st.markdown("""
+                    <style>
+                        .mispronounced {
+                            background-color: rgba(255, 0, 0, 0.1);
+                            padding: 0 2px;
+                            border-radius: 2px;
+                            color: #ff0000;
+                            font-weight: bold;
+                        }
+                        .transcription-text {
+                            white-space: pre-wrap;
+                            word-wrap: break-word;
+                            font-size: 16px;
+                            line-height: 1.6;
+                            padding: 15px;
+                            background-color: #f8f9fa;
+                            border-radius: 5px;
+                        }
+                    </style>
+                """, unsafe_allow_html=True)
                 
                 # Audio player
                 if audio_base64:
@@ -1291,27 +1368,6 @@ def services():
                 status_container.error(f"An error occurred: {str(e)}")
                 st.stop()
             
-            # Always show download buttons if files exist
-            if st.session_state.text_filepath and os.path.exists(st.session_state.text_filepath):
-                text_content = load_processed_data(st.session_state.text_filepath)
-                if text_content:
-                    st.download_button(
-                        label="Download Refined Speech Text",
-                        data=text_content,
-                        file_name="refined_speech.txt",
-                        mime="text/plain"
-                    )
-            
-            if st.session_state.audio_filepath and os.path.exists(st.session_state.audio_filepath):
-                audio_content = load_processed_data(st.session_state.audio_filepath)
-                if audio_content:
-                    st.download_button(
-                        label="Download Refined Speech Audio",
-                        data=audio_content,
-                        file_name="refined_speech.wav",
-                        mime="audio/wav"
-                    )
-
     # Display Results
     if st.session_state.get('results'):
         st.subheader("Analysis Results")
